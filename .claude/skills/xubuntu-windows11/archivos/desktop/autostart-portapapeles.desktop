@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Portapapeles (servicio)
+Exec=@HOME@/.local/bin/portapapeles
+Icon=portapapeles
+Terminal=false
+NoDisplay=true

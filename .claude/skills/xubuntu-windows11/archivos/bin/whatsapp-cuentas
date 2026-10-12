@@ -1,0 +1,463 @@
+#!/usr/bin/env python3
+"""Cuentas de WhatsApp: crea, edita y borra cuentas de WhatsApp Web, cada una como
+app propia (nombre + icono de la marca) en el menú y la barra.
+
+Cada cuenta N≥2 es un perfil de Brave "WhatsApp N" que abre ~/.local/bin/whatsapp-app N.
+La cuenta 1 es el perfil principal de Brave (whatsapp-web.desktop).
+El .desktop de cada cuenta es la única fuente de verdad (nombre e icono).
+
+Uso: whatsapp-cuentas            → ventana del gestor
+     whatsapp-cuentas --borrar N → borra la cuenta N sin preguntar
+"""
+import base64
+import glob
+import html
+import io
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+APPS = f"{HOME}/.local/share/applications"
+DATA = f"{HOME}/.local/share/whatsapp-cuentas"
+BIN = f"{HOME}/.local/bin/whatsapp-app"
+WA_SVG = f"{HOME}/.local/share/icons/custom/whatsapp.svg"
+BRAVE_DIR = f"{HOME}/snap/brave/current/.config/BraveSoftware/Brave-Browser"
+EMOJI_FONT = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"  # Noto, SIL OFL: libre uso
+EMOJI_ES = "/usr/share/gtk-3.0/emoji/es.gresource"  # nombres y palabras clave en español (GTK)
+SUGERIDOS = "🏠 🏡 🏢 🏬 🛒 🛍️ 💼 📊 💰 💳 🍔 🍕 ☕ 🍰 🍷 💇 💅 💄 🏋️ 🚗 🔧 🔨 📚 🎓 🩺 💊 ❤️ ⭐ 🌱 🌸 🐾 📸 🎵 🎮 ⚽ ✈️ 🏖️ 📦 📱 💡".split()
+# Los nombres de GTK son de España: equivalencias latinoamericanas para el buscador
+SINONIMOS = {
+    "carro": ["coche"], "auto": ["coche"], "celular": ["movil"], "computador": ["ordenador"],
+    "computadora": ["ordenador"], "plata": ["dinero"], "tienda": ["compra", "bolsa"],
+    "comida": ["hamburguesa", "pizza", "plato"], "bus": ["autobus"], "camion": ["camion"],
+    "lentes": ["gafas"], "anteojos": ["gafas"], "jugo": ["zumo"], "durazno": ["melocoton"],
+    "papa": ["patata"], "frijol": ["judia"], "torta": ["tarta", "pastel"], "mesero": ["camarero"],
+    "plomero": ["fontanero"], "peluqueria": ["peluquero", "corte de pelo"], "salon": ["peluquero"],
+    "inmobiliaria": ["casa", "edificio"], "finca": ["casa con jardin", "granja"],
+}
+TITLE = "Cuentas de WhatsApp"
+
+
+# ---------- utilidades ----------
+
+def zenity(*args):
+    """Corre zenity; devuelve (código, salida sin salto final)."""
+    p = subprocess.run(["zenity", f"--title={TITLE}", *args],
+                       capture_output=True, text=True)
+    return p.returncode, p.stdout.rstrip("\n")
+
+
+def info(msg):
+    zenity("--info", "--width=380", "--ok-label=Aceptar", f"--text={msg}")
+
+
+def desktop_path(n):
+    return f"{APPS}/whatsapp-web.desktop" if n == 1 else f"{APPS}/whatsapp-web-{n}.desktop"
+
+
+def desktop_id(n):
+    return os.path.basename(desktop_path(n))[:-len(".desktop")]
+
+
+def read_desktop(n):
+    d = {}
+    with open(desktop_path(n)) as f:
+        for line in f:
+            if "=" in line and not line.startswith("#"):
+                k, v = line.rstrip("\n").split("=", 1)
+                d.setdefault(k, v)
+    return d
+
+
+def accounts():
+    """Lista [(n, nombre)] ordenada."""
+    out = []
+    if os.path.exists(desktop_path(1)):
+        out.append((1, read_desktop(1).get("Name", "WhatsApp")))
+    for p in glob.glob(f"{APPS}/whatsapp-web-*.desktop"):
+        m = re.search(r"whatsapp-web-(\d+)\.desktop$", p)
+        if m:
+            n = int(m.group(1))
+            out.append((n, read_desktop(n).get("Name", f"WhatsApp {n}")))
+    return sorted(out)
+
+
+def next_free():
+    n = 2
+    while os.path.exists(desktop_path(n)) or os.path.exists(f"{BRAVE_DIR}/WhatsApp {n}"):
+        n += 1
+    return n
+
+
+def write_desktop(n, name, icon):
+    cls = "WhatsApp" if n == 1 else f"WhatsApp-{n}"
+    exe = BIN if n == 1 else f"{BIN} {n}"
+    with open(desktop_path(n), "w") as f:
+        f.write(f"""[Desktop Entry]
+Type=Application
+Name={name}
+GenericName=WhatsApp
+Comment=WhatsApp — {name}
+Exec={exe}
+Icon={icon}
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=whatsapp;
+StartupWMClass={cls}
+StartupNotify=true
+""")
+    subprocess.run(["update-desktop-database", APPS], capture_output=True)
+
+
+# ---------- iconos ----------
+
+def wa_badge(x, y, size):
+    """Logo de WhatsApp con aro blanco, como <svg> anidado."""
+    with open(WA_SVG) as f:
+        inner = re.sub(r"^.*?<svg[^>]*>|</svg>\s*$", "", f.read(), flags=re.S)
+    r = size / 2
+    return (f'<circle cx="{x + r}" cy="{y + r}" r="{r}" fill="#fff"/>'
+            f'<svg x="{x + size * .1}" y="{y + size * .1}" width="{size * .8}" '
+            f'height="{size * .8}" viewBox="0 0 64 64">{inner}</svg>')
+
+
+def initials(name):
+    words = [w for w in re.split(r"\s+", name.strip()) if w]
+    if not words:
+        return "W"
+    if len(words) == 1:
+        return words[0][:2].upper()
+    return (words[0][0] + words[1][0]).upper()
+
+
+def png_href(im):
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def render_emoji(emoji):
+    """Imagen RGBA recortada del emoji, o None si el texto no es un emoji dibujable."""
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.truetype(EMOJI_FONT, 109)  # Noto Color Emoji solo existe a 109 px
+    im = Image.new("RGBA", (400, 200), (0, 0, 0, 0))
+    ImageDraw.Draw(im).text((20, 20), emoji, font=font, embedded_color=True)
+    box = im.getbbox()
+    if not box:
+        return None
+    im = im.crop(box)
+    return im if im.width < 250 else None  # más de un emoji / texto largo
+
+
+def make_icon(n, name, logo=None, color="#25D366", emoji=None):
+    """Genera el icono SVG de la cuenta y devuelve su ruta (nombre nuevo para
+    que la barra y el menú no usen una versión en caché)."""
+    d = f"{DATA}/{n}"
+    os.makedirs(d, exist_ok=True)
+    for old in glob.glob(f"{d}/icono-*.svg"):
+        os.remove(old)
+    clip = '<clipPath id="c"><rect x="4" y="4" width="120" height="120" rx="28"/></clipPath>'
+    if logo:
+        if logo.lower().endswith(".svg"):
+            with open(logo, "rb") as f:
+                href = "data:image/svg+xml;base64," + base64.b64encode(f.read()).decode()
+        else:
+            from PIL import Image
+            im = Image.open(logo).convert("RGBA")
+            im.thumbnail((512, 512))
+            href = png_href(im)
+        body = (f'<rect x="4" y="4" width="120" height="120" rx="28" fill="#fff"/>'
+                f'<image x="4" y="4" width="120" height="120" clip-path="url(#c)" '
+                f'preserveAspectRatio="xMidYMid slice" href="{href}"/>')
+    elif emoji:
+        im = render_emoji(emoji)
+        if im is None:
+            raise ValueError("eso no parece un emoji")
+        body = (f'<rect x="4" y="4" width="120" height="120" rx="28" fill="{color}"/>'
+                f'<image x="20" y="18" width="88" height="88" '
+                f'preserveAspectRatio="xMidYMid meet" href="{png_href(im)}"/>')
+    else:
+        txt = html.escape(initials(name))
+        fs = 58 if len(txt) <= 1 else 50
+        body = (f'<rect x="4" y="4" width="120" height="120" rx="28" fill="{color}"/>'
+                f'<text x="64" y="64" dy=".35em" text-anchor="middle" font-family="Inter" '
+                f'font-weight="700" font-size="{fs}" fill="#fff">{txt}</text>')
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" '
+           f'viewBox="0 0 128 128"><defs>{clip}</defs>{body}{wa_badge(78, 78, 50)}</svg>')
+    path = f"{d}/icono-{int(time.time())}.svg"
+    with open(path, "w") as f:
+        f.write(svg)
+    return path
+
+
+def ask_color(default, title):
+    code, color = zenity("--color-selection", f"--color={default}", f"--title={title}")
+    if code != 0:
+        return None
+    m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", color)
+    return "#%02x%02x%02x" % tuple(int(v) for v in m.groups()) if m else color
+
+
+def _sin_tildes(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s.lower())
+                   if unicodedata.category(c) != "Mn")
+
+
+def emoji_data():
+    """[(emoji, nombre, texto_de_búsqueda)] con nombres y palabras clave en español."""
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+        res = Gio.Resource.load(EMOJI_ES)
+        raw = res.lookup_data("/org/gtk/libgtk/emoji/es.data", 0)
+        data = GLib.Variant.new_from_bytes(GLib.VariantType.new("a(ausasu)"), raw, False).unpack()
+    except Exception:
+        return []
+    out = []
+    for cps, nombre, claves, _grupo in data:
+        e = "".join(chr(c) for c in cps if c)  # 0 = marcador de tono de piel
+        out.append((e, nombre, _sin_tildes(" ".join([nombre, *claves]))))
+    return out
+
+
+def ask_emoji():
+    """Buscador de emojis en español. Devuelve el emoji elegido o None."""
+    data = emoji_data()
+    nombres = {e: n for e, n, _ in data}
+    while True:
+        code, q = zenity("--entry", "--width=420",
+                         "--text=Buscar emoji (ej. casa, café, carro, corazón, perro).\n"
+                         "Déjalo vacío para ver sugerencias.", "--ok-label=Buscar", "--cancel-label=Cancelar")
+        if code != 0:
+            return None
+        q = _sin_tildes(q.strip())
+        if q:
+            grupos = [[p, *SINONIMOS.get(p, [])] for p in q.split()]
+            hits = [(e, n) for e, n, t in data
+                    if all(any(p in t for p in g) for g in grupos)][:300]
+            if not hits:
+                info(f"No encontré emojis para «{html.escape(q)}». Prueba con otra palabra.")
+                continue
+        else:
+            hits = [(e, nombres.get(e, nombres.get(e.replace("️", ""), ""))) for e in SUGERIDOS]
+        rows = ["✏️", "Pegar otro emoji…"]
+        for e, n in hits:
+            rows += [e, n]
+        code, out = zenity("--list", "--width=440", "--height=700",
+                           "--text=Elige un emoji:", "--column=Emoji", "--column=Nombre",
+                           "--print-column=1", "--ok-label=Usar este", "--cancel-label=Cancelar",
+                           "--extra-button=Buscar otra vez", *rows)
+        if out == "Buscar otra vez":
+            continue
+        if code != 0 or not out:
+            return None
+        e = out.split("|")[0]
+        if e == "✏️":
+            code, e = zenity("--entry", "--width=420",
+                             "--text=Pega o escribe un emoji (Ctrl+. abre el selector de emojis):", "--ok-label=Usar", "--cancel-label=Volver")
+            if code != 0 or not e.strip():
+                continue
+        return e.strip()
+
+
+def ask_icon(n, name):
+    """Pregunta logo, emoji o iniciales y genera el icono. None si se cancela."""
+    code, kind = zenity("--list", "--width=380", "--height=360", "--ok-label=Siguiente", "--cancel-label=Cancelar",
+                        f"--text=¿Qué icono quieres para «{html.escape(name)}»?",
+                        "--column=Tipo de icono", "Logo o imagen", "Emoji", "Iniciales y color")
+    if code != 0 or not kind:
+        return None
+    if kind.startswith("Logo"):
+        code, logo = zenity("--file-selection", "--title=Elige el logo",
+                            "--file-filter=Imágenes | *.png *.jpg *.jpeg *.webp *.svg *.PNG *.JPG *.JPEG")
+        if code != 0 or not logo:
+            return None
+        try:
+            return make_icon(n, name, logo=logo)
+        except Exception as e:
+            info(f"No se pudo usar esa imagen:\n{html.escape(str(e))}")
+            return None
+    if kind == "Emoji":
+        while True:
+            emoji = ask_emoji()
+            if not emoji:
+                return None
+            if render_emoji(emoji):
+                break
+            info("Eso no parece un emoji. Elige o pega uno solo.")
+        color = ask_color("#F3F3F3", "Color de fondo del icono")
+        return make_icon(n, name, color=color, emoji=emoji) if color else None
+    color = ask_color("#25D366", "Elige un color")
+    return make_icon(n, name, color=color) if color else None
+
+
+# ---------- barra (docklike) ----------
+
+def _edit_pins(fn):
+    rc = glob.glob(f"{HOME}/.config/xfce4/panel/docklike-*.rc")
+    if not rc:
+        return
+    subprocess.run(["xfce4-panel", "-q"])
+    time.sleep(1)
+    with open(rc[0]) as f:
+        txt = f.read()
+    m = re.search(r"^pinned=(.*)$", txt, flags=re.M)
+    pins = [p for p in (m.group(1).split(";") if m else []) if p]
+    pins = fn(pins)
+    line = "pinned=" + "".join(p + ";" for p in pins)
+    txt = re.sub(r"^pinned=.*$", line, txt, flags=re.M) if m else txt + line + "\n"
+    with open(rc[0], "w") as f:
+        f.write(txt)
+    subprocess.Popen(["xfce4-panel"], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def pin(n):
+    did = desktop_id(n)
+
+    def fn(pins):
+        if did in pins:
+            return pins
+        wa = [i for i, p in enumerate(pins) if p.startswith("whatsapp-web")]
+        pos = wa[-1] + 1 if wa else len(pins)
+        return pins[:pos] + [did] + pins[pos:]
+    _edit_pins(fn)
+
+
+def unpin(n):
+    did = desktop_id(n)
+    _edit_pins(lambda pins: [p for p in pins if p != did])
+
+
+def reload_panel():
+    subprocess.Popen(["xfce4-panel", "-r"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ---------- acciones ----------
+
+def open_account(n):
+    subprocess.Popen([BIN] + ([] if n == 1 else [str(n)]), start_new_session=True)
+
+
+def pick(prompt, include_first=True):
+    rows = []
+    for n, name in accounts():
+        if n == 1 and not include_first:
+            continue
+        rows += [str(n), name]
+    if not rows:
+        info("No hay cuentas para elegir.")
+        return None
+    code, out = zenity("--list", "--width=420", "--height=460", "--ok-label=Elegir", "--cancel-label=Cancelar", f"--text={prompt}",
+                       "--column=N", "--column=Cuenta", "--hide-column=1",
+                       "--print-column=1", *rows)
+    return int(out.split("|")[0]) if code == 0 and out else None
+
+
+def new_account():
+    code, name = zenity("--entry", "--width=380",
+                        "--text=Nombre de la cuenta (por ejemplo, la marca):", "--ok-label=Siguiente", "--cancel-label=Cancelar")
+    name = name.strip()
+    if code != 0 or not name:
+        return
+    n = next_free()
+    icon = ask_icon(n, name)
+    if not icon:
+        return
+    write_desktop(n, name, icon)
+    pin(n)
+    open_account(n)
+    info(f"Listo: «{html.escape(name)}» ya está en el menú y en la barra.\n\n"
+         "Se abrió su ventana: escanea el código QR desde el WhatsApp de esa cuenta "
+         "(Dispositivos vinculados → Vincular un dispositivo).")
+
+
+def edit_account():
+    n = pick("¿Qué cuenta quieres editar?")
+    if n is None:
+        return
+    d = read_desktop(n)
+    name = d.get("Name", "WhatsApp")
+    code, what = zenity("--list", "--width=360", "--height=360", "--ok-label=Siguiente", "--cancel-label=Cancelar",
+                        f"--text=Editar «{html.escape(name)}»", "--column=Acción",
+                        "Cambiar nombre", "Cambiar icono", "Cambiar nombre e icono")
+    if code != 0 or not what:
+        return
+    icon = d.get("Icon", WA_SVG)
+    if "nombre" in what:
+        code, new = zenity("--entry", "--width=380", "--text=Nuevo nombre:", f"--entry-text={name}", "--ok-label=Guardar", "--cancel-label=Cancelar")
+        if code != 0 or not new.strip():
+            return
+        name = new.strip()
+    if "icono" in what:
+        new_icon = ask_icon(n, name)
+        if not new_icon:
+            return
+        icon = new_icon
+    write_desktop(n, name, icon)
+    reload_panel()
+
+
+def delete_account(n=None, confirm=True):
+    if n is None:
+        n = pick("¿Qué cuenta quieres borrar?\n(La cuenta principal no se puede borrar.)",
+                 include_first=False)
+    if n is None or n == 1 or not os.path.exists(desktop_path(n)):
+        return
+    name = read_desktop(n).get("Name", f"WhatsApp {n}")
+    if confirm:
+        code, _ = zenity("--question", "--width=400", "--icon=dialog-warning",
+                         f"--text=¿Borrar la cuenta «{html.escape(name)}»?\n\n"
+                         "Se cerrará su sesión en este PC y se quitará del menú y la barra. "
+                         "Tus chats siguen en el celular.",
+                         "--ok-label=Borrar", "--cancel-label=Cancelar")
+        if code != 0:
+            return
+    w = subprocess.run(["xdotool", "search", "--classname", f"^web\\.whatsapp\\.com__cuenta-{n}$"],
+                       capture_output=True, text=True).stdout.split()
+    for win in w:
+        subprocess.run(["xdotool", "windowclose", win], capture_output=True)
+    unpin(n)
+    os.remove(desktop_path(n))
+    subprocess.run(["update-desktop-database", APPS], capture_output=True)
+    shutil.rmtree(f"{DATA}/{n}", ignore_errors=True)
+    time.sleep(3)  # que Brave suelte el perfil antes de borrarlo
+    shutil.rmtree(f"{BRAVE_DIR}/WhatsApp {n}", ignore_errors=True)
+
+
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--borrar":
+        delete_account(int(sys.argv[2]), confirm=False)
+        return
+    while True:
+        rows = []
+        for n, name in accounts():
+            rows += [str(n), name]
+        code, out = zenity("--list", "--width=460", "--height=720",
+                           "--text=Tus cuentas de WhatsApp. Doble clic (o «Abrir») para abrir una.",
+                           "--column=N", "--column=Cuenta", "--hide-column=1", "--print-column=1",
+                           "--ok-label=Abrir", "--cancel-label=Cerrar",
+                           "--extra-button=Borrar", "--extra-button=Editar",
+                           "--extra-button=Nueva cuenta", *rows)
+        if code == 0:
+            if out:
+                open_account(int(out.split("|")[0]))
+            return
+        if out == "Nueva cuenta":
+            new_account()
+        elif out == "Editar":
+            edit_account()
+        elif out == "Borrar":
+            delete_account()
+        else:
+            return
+
+
+if __name__ == "__main__":
+    main()

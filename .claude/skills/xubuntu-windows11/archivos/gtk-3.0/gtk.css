@@ -1,0 +1,25 @@
+/* Separación de iconos estilo barra de Windows 11 */
+#docklike-11 button,
+.xfce-docklike-window button.group,
+#whiskermenu-1 button {
+  margin: 0 3px;
+  padding: 0 8px;
+  border-radius: 6px;
+}
+
+/* Barra sin bordes, como Windows 11 */
+.xfce4-panel.background { border-width: 0; box-shadow: none; }
+
+/* ===== Explorador (Thunar) estilo Windows 11 =====
+   Usa los colores del tema activo para funcionar igual en claro y oscuro. */
+.thunar treeview.view { padding-top: 0; padding-bottom: 0; }
+.thunar treeview.view:hover { background-color: alpha(@theme_fg_color, 0.06); }
+.thunar treeview.view:selected,
+.thunar treeview.view:selected:focus { background-color: alpha(@theme_selected_bg_color, 0.25); color: @theme_fg_color; }
+.thunar iconview.view:selected,
+.thunar iconview.view:selected:focus { background-color: alpha(@theme_selected_bg_color, 0.25); color: @theme_fg_color; border-radius: 4px; }
+.thunar treeview.view header button { border: none; box-shadow: none; background: transparent; padding: 6px 10px; color: alpha(@theme_fg_color, 0.65); }
+/* barra lateral */
+.thunar .sidebar, .thunar .shortcuts-pane, .thunar paned > scrolledwindow:first-child treeview.view { background-color: shade(@theme_base_color, 0.97); }
+.thunar .sidebar treeview.view:selected,
+.thunar paned > scrolledwindow:first-child treeview.view:selected { background-color: alpha(@theme_fg_color, 0.08); color: @theme_fg_color; box-shadow: inset 3px 0 0 @theme_selected_bg_color; }

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cuentas de WhatsApp
+Comment=Crear, editar y borrar cuentas de WhatsApp (una app por marca)
+Exec=@HOME@/.local/bin/whatsapp-cuentas
+Icon=@HOME@/.local/share/icons/custom/whatsapp-cuentas.svg
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=whatsapp;nueva;cuenta;

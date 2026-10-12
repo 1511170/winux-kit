@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Portapapeles
+Comment=Historial de lo copiado (Win+V)
+Exec=@HOME@/.local/bin/portapapeles --mostrar
+Icon=portapapeles
+Terminal=false
+Categories=Utility;
+Keywords=clipboard;copiar;pegar;historial;

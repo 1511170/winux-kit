@@ -1,0 +1,17 @@
+#!/bin/bash
+# Captura estilo Windows: guarda en ~/Imágenes/Capturas y copia al portapapeles, sin abrir ventanas.
+# Uso: captura recorte | pantalla | ventana
+DIR="$HOME/Imágenes/Capturas"; mkdir -p "$DIR"
+F="$DIR/Captura $(date '+%Y-%m-%d %H-%M-%S').png"
+case "${1:-recorte}" in
+  recorte)  MODO=-r ;;
+  pantalla) MODO=-f ;;
+  ventana)  MODO=-w ;;
+  *) echo "Uso: captura recorte|pantalla|ventana"; exit 1 ;;
+esac
+xfce4-screenshooter $MODO -s "$F" 2>/dev/null
+# Esc en el recorte = no se crea archivo
+for i in $(seq 20); do [ -s "$F" ] && break; sleep 0.1; done
+[ -s "$F" ] || exit 0
+xclip -selection clipboard -t image/png -i "$F"
+notify-send -i "$F" "Captura copiada" "Pégala con Ctrl+V · guardada en Imágenes/Capturas"

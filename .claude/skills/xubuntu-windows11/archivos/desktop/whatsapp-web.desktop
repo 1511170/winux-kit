@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=WhatsApp
+Comment=WhatsApp Web como aplicación
+Exec=@HOME@/.local/bin/whatsapp-app
+Icon=@HOME@/.local/share/icons/custom/whatsapp.svg
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+StartupWMClass=WhatsApp
+StartupNotify=true

@@ -1,0 +1,43 @@
+#!/bin/bash
+# Cambia el look Windows 11 entre claro y oscuro.
+# Uso: tema claro | tema oscuro | tema (alterna)
+ESTADO=~/.config/tema-actual
+actual=$(cat "$ESTADO" 2>/dev/null || echo claro)
+modo=${1:-$([ "$actual" = oscuro ] && echo claro || echo oscuro)}
+
+case "$modo" in
+  oscuro) GTK=Fluent-round-Dark;  ICON=Win11-dark; CUR=Fluent-dark-cursors; SCHEME=prefer-dark; BG=win11-bloom-dark.png ;;
+  claro)  GTK=Fluent-round-Light; ICON=Win11;      CUR=Fluent-cursors;      SCHEME=default;     BG=win11-bloom.png ;;
+  *) echo "Uso: tema [claro|oscuro]"; exit 1 ;;
+esac
+
+if [ ! -d ~/.themes/$GTK ]; then
+  notify-send -i dialog-warning "Tema" "Falta instalar $GTK"; exit 1
+fi
+
+x(){ xfconf-query -c "$1" -p "$2" -n -t "$3" -s "$4" 2>/dev/null || xfconf-query -c "$1" -p "$2" -s "$4"; }
+x xsettings /Net/ThemeName string $GTK
+x xsettings /Net/IconThemeName string $ICON
+x xsettings /Gtk/CursorThemeName string $CUR
+x xfwm4 /general/theme string $GTK
+gsettings set org.gnome.desktop.interface color-scheme $SCHEME
+gsettings set org.gnome.desktop.interface gtk-theme $GTK
+gsettings set org.gnome.desktop.interface icon-theme $ICON
+gsettings set org.gnome.desktop.interface cursor-theme $CUR
+
+mkdir -p ~/.icons/default && printf '[Icon Theme]\nInherits=%s\n' $CUR > ~/.icons/default/index.theme
+
+# Apps GTK4 / libadwaita
+G4=~/.config/gtk-4.0; mkdir -p $G4
+for f in assets gtk.css gtk-dark.css; do
+  rm -f "$G4/$f"; [ -e ~/.themes/$GTK/gtk-4.0/$f ] && ln -s ~/.themes/$GTK/gtk-4.0/$f "$G4/$f"
+done
+
+
+for ws in 0 1 2 3; do
+  x xfce4-desktop /backdrop/screen0/monitor@MONITOR@/workspace$ws/last-image string "$HOME/Imágenes/Fondos/$BG"
+done
+
+echo $modo > "$ESTADO"
+(setsid xfce4-panel -r >/dev/null 2>&1 &)
+notify-send -i preferences-desktop-theme "Tema" "Modo $modo activado"

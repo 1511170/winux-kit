@@ -1,0 +1,29 @@
+#!/bin/bash
+# Abre una cuenta de WhatsApp Web como app de Brave.
+#   whatsapp-app      → cuenta 1 (perfil principal de Brave, clase "WhatsApp")
+#   whatsapp-app N    → cuenta N (perfil "WhatsApp N", clase "WhatsApp-N")
+# Cada cuenta N≥2 se abre en la URL /cuenta-N: Brave le da a su ventana la instancia
+# única "web.whatsapp.com__cuenta-N" (WhatsApp redirige a / y funciona igual), así se
+# encuentra siempre, incluso tras reiniciar Brave. La clase se renombra para que la
+# barra (docklike) la agrupe con su propio icono. Si ya está abierta, la muestra.
+N="${1:-1}"
+if [ "$N" = 1 ]; then
+  INST='^web\.whatsapp\.com$'; CLASS=WhatsApp
+  LAUNCH=(/snap/bin/brave --app=https://web.whatsapp.com/)
+else
+  INST="^web\.whatsapp\.com__cuenta-$N\$"; CLASS="WhatsApp-$N"
+  LAUNCH=(/snap/bin/brave --profile-directory="WhatsApp $N" --app="https://web.whatsapp.com/cuenta-$N")
+fi
+find_win() { xdotool search --classname "$INST" 2>/dev/null | head -1; }
+W=$(find_win)
+if [ -n "$W" ]; then
+  xdotool set_window --class "$CLASS" "$W"
+  xdotool windowactivate "$W"
+  exit 0
+fi
+"${LAUNCH[@]}" >/dev/null 2>&1 &
+for i in $(seq 60); do
+  sleep 0.25
+  W=$(find_win)
+  [ -n "$W" ] && { xdotool set_window --class "$CLASS" "$W"; exit 0; }
+done

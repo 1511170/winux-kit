@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Cambiar tema claro/oscuro
+Comment=Alterna el look Windows 11 entre claro y oscuro
+Exec=@HOME@/.local/bin/tema
+Icon=weather-clear-night-symbolic
+Terminal=false
+Categories=Settings;DesktopSettings;
